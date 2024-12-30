@@ -50,7 +50,171 @@ func NewClient(apiKey string, opts ...ClientOption) *AnthropicClient {
 }
 
 // ChatWithTools handles chat interactions with tool support
+// File: goanthropic.go
+
+// ChatWithTools handles chat interactions with tool support
 func (c *AnthropicClient) ChatWithTools(ctx context.Context, message string, params *types.MessageParams, handlers []types.ToolHandler) (*types.AnthropicResponse, error) {
+    // Use default params if none provided
+    finalParams := c.defaultParams
+    if params != nil {
+        // Merge any non-zero params from the provided params
+        if params.Model != "" {
+            finalParams.Model = params.Model
+        }
+        if params.MaxTokens != 0 {
+            finalParams.MaxTokens = params.MaxTokens
+        }
+        if params.Temperature != 0 {
+            finalParams.Temperature = params.Temperature
+        }
+        if params.TopP != 0 {
+            finalParams.TopP = params.TopP
+        }
+        if params.TopK != 0 {
+            finalParams.TopK = params.TopK
+        }
+        if params.Tools != nil {
+            finalParams.Tools = params.Tools
+        }
+        if params.ToolChoice != nil {
+            finalParams.ToolChoice = params.ToolChoice
+        }
+    }
+
+    // Validate the merged parameters
+    if err := validateToolParams(&finalParams); err != nil {
+        return nil, fmt.Errorf("invalid parameters: %w", err)
+    }
+
+    content := []types.MessageContent{{
+        Type: types.ContentTypeText,
+        Text: message,
+    }}
+
+    c.addMessageToConversation(types.RoleUser, content)
+    c.trimConversationHistory()
+
+    // Main interaction loop
+    const maxIterations = 10
+    iterations := 0
+
+    for {
+        if iterations >= maxIterations {
+            return nil, fmt.Errorf("exceeded maximum number of tool call iterations (%d)", maxIterations)
+        }
+
+        reqBody := types.Request{
+            Model:       finalParams.Model,
+            System:      c.systemPrompt,
+            Messages:    c.conversation,
+            MaxTokens:   finalParams.MaxTokens,
+            Temperature: finalParams.Temperature,
+            TopP:        finalParams.TopP,
+            TopK:        finalParams.TopK,
+            Tools:       finalParams.Tools,
+            ToolChoice:  finalParams.ToolChoice,
+        }
+
+        response, err := c.sendRequest(ctx, reqBody)
+        if err != nil {
+            return nil, err
+        }
+
+        // Add assistant's response to conversation
+        if len(response.Content) > 0 {
+            c.addMessageToConversation(types.RoleAssistant, response.Content)
+            c.trimConversationHistory()
+        }
+
+        // Check if we need to execute tools
+        if response.StopReason != types.StopReasonToolUse {
+            return response, nil
+        }
+
+        // Extract and process tool calls
+        toolCalls := extractToolCalls(response)
+        if len(toolCalls) == 0 {
+            return nil, fmt.Errorf("received tool_use stop reason but no valid tool calls found")
+        }
+
+        // Execute tools and collect results
+        var resultContents []types.MessageContent
+        for _, call := range toolCalls {
+            // Find matching handler
+            var handler types.ToolHandler
+            for _, h := range handlers {
+                if h.GetTool().Name == call.Name {
+                    handler = h
+                    break
+                }
+            }
+
+            if handler == nil {
+                return nil, fmt.Errorf("no handler for tool: %s", call.Name)
+            }
+
+            // Execute tool
+            result, err := handler.Execute(ctx, call.Input)
+            if err != nil {
+                resultContents = append(resultContents, types.MessageContent{
+                    Type:      types.ContentTypeToolResult,
+                    ToolUseID: call.ID,
+                    Content:   fmt.Sprintf("Error executing tool: %v", err),
+                    IsError:   true,
+                })
+                continue
+            }
+
+            resultContents = append(resultContents, types.MessageContent{
+                Type:      types.ContentTypeToolResult,
+                ToolUseID: call.ID,
+                Content:   result,
+            })
+        }
+
+        // Add tool results to conversation
+        c.addMessageToConversation(types.RoleUser, resultContents)
+        c.trimConversationHistory()
+
+        // Clear tool choice after first iteration
+        if iterations == 0 {
+            finalParams.ToolChoice = nil
+        }
+
+        iterations++
+    }
+}
+// File: goanthropic.go
+
+// extractToolCalls processes the assistant's response to identify and validate tool calls
+func extractToolCalls(resp *types.AnthropicResponse) []types.ToolUse {
+    var calls []types.ToolUse
+    
+    if resp == nil {
+        return calls
+    }
+
+    // Process each content item for potential tool calls
+    for _, content := range resp.Content {
+        if content.Type == types.ContentTypeToolUse {
+            // Validate required fields
+            if content.ID == "" || content.Name == "" || content.Input == nil {
+                continue
+            }
+            
+            // Create and record valid tool call
+            call := types.ToolUse{
+                ID:    content.ID,
+                Name:  content.Name,
+                Input: content.Input,
+            }
+            calls = append(calls, call)
+        }
+    }
+    
+    return calls
+}
+func (c *AnthropicClient) XChatWithTools(ctx context.Context, message string, params *types.MessageParams, handlers []types.ToolHandler) (*types.AnthropicResponse, error) {
     // Use default params if none provided
     finalParams := c.defaultParams
     if params != nil {
