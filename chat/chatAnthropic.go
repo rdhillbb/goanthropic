@@ -40,6 +40,8 @@ func main() {
         defer goanthropic.DisableDebug()
     }
 
+    handlers := GetDefaultHandlers() // This now returns []types.ToolHandler
+    
     client := goanthropic.NewClient(apiKey, 
         goanthropic.WithDefaultParams(types.MessageParams{
             Model:      defaultModel,
@@ -50,7 +52,6 @@ func main() {
         goanthropic.WithMaxConversationLength(1000),
     )
 
-    handlers := GetDefaultHandlers()
     scanner := bufio.NewScanner(os.Stdin)
     ctx := context.Background()
 
@@ -80,7 +81,7 @@ func main() {
             ctx,
             input,
             nil,
-            handlers,
+            handlers,  // Now this is []types.ToolHandler
         )
 
         if err != nil {

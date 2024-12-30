@@ -301,13 +301,3 @@ func logJSON(prefix string, data interface{}) {
     }
 }
 
-// Package-level logging control
-/*
-func EnableDebug() error {
-    return logging.EnableLogging()
-}
-
-func DisableDebug() {
-    logging.DisableLogging()
-}
-*/

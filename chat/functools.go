@@ -7,7 +7,28 @@ import (
     "github.com/rdhillbb/goanthropic/types"
 )
 
-//
+// BaseToolHandler provides a base implementation of ToolHandler
+type BaseToolHandler struct {
+    tool types.Tool
+    handler func(context.Context, json.RawMessage) (string, error)
+}
+
+func (h *BaseToolHandler) Execute(ctx context.Context, input json.RawMessage) (string, error) {
+    return h.handler(ctx, input)
+}
+
+func (h *BaseToolHandler) GetTool() types.Tool {
+    return h.tool
+}
+
+// CreateToolHandler creates a new ToolHandler with the given tool and handler function
+func CreateToolHandler(tool types.Tool, handler func(context.Context, json.RawMessage) (string, error)) types.ToolHandler {
+    return &BaseToolHandler{
+        tool: tool,
+        handler: handler,
+    }
+}
+
 // GetWeather returns the weather tool definition using Anthropic types
 func GetWeather() types.Tool {
     return types.Tool{
@@ -144,10 +165,10 @@ func GetDefaultTools() []types.Tool {
 }
 
 // GetDefaultHandlers returns the default set of tool handlers
-func GetDefaultHandlers() map[string]func(context.Context, json.RawMessage) (string, error) {
-    return map[string]func(context.Context, json.RawMessage) (string, error){
-        "get_weather":     HandleWeather,
-        "get_stock_price": HandleStock,
-        "search":          HandleSearch,
+func GetDefaultHandlers() []types.ToolHandler {
+    return []types.ToolHandler{
+        CreateToolHandler(GetWeather(), HandleWeather),
+        CreateToolHandler(GetStock(), HandleStock),
+        CreateToolHandler(GetSearch(), HandleSearch),
     }
 }
