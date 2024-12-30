@@ -7,11 +7,22 @@ import (
     "fmt"
     "io/ioutil"
     "net/http"
+    "github.com/rdhillbb/goanthropic/tools"
     "github.com/rdhillbb/logging"
 )
 
-// AnthropicClient handles all communication with the Anthropic API and maintains
-// conversation state. It includes logging capabilities for debugging and monitoring.
+const defaultAPIEndpoint = "https://api.anthropic.com/v1/messages"
+
+// Message types and roles
+const (
+    ContentTypeText = "text"
+    RoleUser       = "user"
+    RoleAssistant  = "assistant"
+)
+
+type ClientOption func(*AnthropicClient)
+
+// AnthropicClient handles all communication with the Anthropic API
 type AnthropicClient struct {
     apiKey          string
     defaultParams   MessageParams
@@ -19,65 +30,66 @@ type AnthropicClient struct {
     conversation    []Message
     maxConvLength   int
     systemPrompt    string
-}   
-
-// Package-level logging control functions allow users to enable/disable logging
-// throughout the entire Anthropic client implementation.
-func StartMessageLogging() error {
-    return logging.EnableLogging()
 }
 
-func StopMessageLogging() {
-    logging.DisableLogging()
+// MessageParams defines the parameters for an API request
+type MessageParams struct {
+    Model       string       `json:"model,omitempty"`
+    MaxTokens   int          `json:"max_tokens,omitempty"`
+    Temperature float64      `json:"temperature,omitempty"`
+    TopP        float64      `json:"top_p,omitempty"`
+    TopK        int          `json:"top_k,omitempty"`
+    Tools       []tools.Tool `json:"tools,omitempty"`
+    ToolChoice  *ToolChoice  `json:"tool_choice,omitempty"`
 }
 
-// Internal logging helpers ensure consistent log formatting and conditional logging
-func logMessage(format string, args ...interface{}) {
-    if logging.IsLoggingEnabled() {
-        msg := fmt.Sprintf(format, args...)
-        logging.WriteLogs(fmt.Sprintf("[Anthropic] %s", msg))
-    }
+// Message represents a conversation message
+type Message struct {
+    Role    string           `json:"role"`
+    Content []MessageContent `json:"content"`
 }
 
-func logJSON(prefix string, data interface{}) {
-    if logging.IsLoggingEnabled() {
-        jsonBytes, err := json.MarshalIndent(data, "", "  ")
-        if err != nil {
-            logMessage("%s: failed to marshal JSON: %v", prefix, err)
-            return
-        }
-        logging.WriteLogs(fmt.Sprintf("[Anthropic] %s: %s", prefix, string(jsonBytes)))
-    }
-}
-// Client option functions that configure the AnthropicClient
-
-// WithMaxConversationLength sets the maximum number of messages to keep in conversation history.
-// This helps manage memory usage and context length by limiting how many previous messages are retained.
-func WithMaxConversationLength(length int) ClientOption {
-    return func(c *AnthropicClient) {
-        if length > 0 {
-            c.maxConvLength = length
-        }
-    }
+// MessageContent represents the content of a message
+type MessageContent struct {
+    Type string `json:"type"`
+    Text string `json:"text"`
 }
 
-func WithDefaultParams(params MessageParams) ClientOption {
-    return func(c *AnthropicClient) {
-        c.defaultParams = params
-    }
+// Request represents the API request structure
+type Request struct {
+    Model       string           `json:"model"`
+    System      string           `json:"system,omitempty"`
+    Messages    []Message        `json:"messages"`
+    MaxTokens   int             `json:"max_tokens,omitempty"`
+    Temperature float64         `json:"temperature,omitempty"`
+    TopP        float64         `json:"top_p,omitempty"`
+    TopK        int             `json:"top_k,omitempty"`
+    Tools       []tools.Tool    `json:"tools,omitempty"`
+    ToolChoice  *ToolChoice     `json:"tool_choice,omitempty"`
 }
 
-// WithHTTPClient sets a custom HTTP client for making requests.
-// This allows for customization of timeouts, transport settings, etc.
-func WithHTTPClient(client *http.Client) ClientOption {
-    return func(c *AnthropicClient) {
-        if client != nil {
-            c.httpClient = client
-        }
-    }
+// AnthropicResponse represents the API response structure
+type AnthropicResponse struct {
+    ID           string           `json:"id"`
+    Type         string           `json:"type"`
+    Role         string           `json:"role"`
+    Content      []MessageContent `json:"content"`
+    Model        string           `json:"model"`
+    StopReason   string           `json:"stop_reason"`
+    StopSequence string           `json:"stop_sequence"`
 }
-// NewClient creates a new AnthropicClient with the provided API key and options.
-// It initializes the client with logging enabled if configured.
+
+// ToolChoice represents the tool choice configuration
+type ToolChoice struct {
+    Type string `json:"type"`
+}
+
+const (
+    ToolChoiceAuto = "auto"
+    ToolChoiceNone = "none"
+)
+
+// NewClient creates a new AnthropicClient
 func NewClient(apiKey string, opts ...ClientOption) *AnthropicClient {
     logMessage("Creating new AnthropicClient")
     client := &AnthropicClient{
@@ -89,7 +101,6 @@ func NewClient(apiKey string, opts ...ClientOption) *AnthropicClient {
         opt(client)
     }
     
-    // Log client configuration without exposing sensitive data
     logJSON("Client configuration", map[string]interface{}{
         "maxConvLength": client.maxConvLength,
         "hasDefaults":   len(client.defaultParams.Tools) > 0 || 
@@ -99,8 +110,126 @@ func NewClient(apiKey string, opts ...ClientOption) *AnthropicClient {
     return client
 }
 
-// sendRequest handles all HTTP communication with the Anthropic API.
-// It includes comprehensive logging of requests, responses, and errors.
+// ChatWithTools handles chat interactions with tool support
+func (c *AnthropicClient) ChatWithTools(ctx context.Context, message string, params *MessageParams, handlers []tools.ToolHandler) (*AnthropicResponse, error) {
+    // Use default params if none provided
+    finalParams := c.defaultParams
+    if params != nil {
+        // Merge any non-zero params from the provided params
+        if params.Model != "" {
+            finalParams.Model = params.Model
+        }
+        if params.MaxTokens != 0 {
+            finalParams.MaxTokens = params.MaxTokens
+        }
+        if params.Temperature != 0 {
+            finalParams.Temperature = params.Temperature
+        }
+        if params.TopP != 0 {
+            finalParams.TopP = params.TopP
+        }
+        if params.TopK != 0 {
+            finalParams.TopK = params.TopK
+        }
+        if params.Tools != nil {
+            finalParams.Tools = params.Tools
+        }
+        if params.ToolChoice != nil {
+            finalParams.ToolChoice = params.ToolChoice
+        }
+    }
+
+    // Validate the merged parameters
+    if err := validateToolParams(&finalParams); err != nil {
+        return nil, fmt.Errorf("invalid parameters: %w", err)
+    }
+
+    content := []MessageContent{{
+        Type: ContentTypeText,
+        Text: message,
+    }}
+
+    c.addMessageToConversation(RoleUser, content)
+    c.trimConversationHistory()
+
+    reqBody := Request{
+        Model:       finalParams.Model,
+        System:      c.systemPrompt,
+        Messages:    c.conversation,
+        MaxTokens:   finalParams.MaxTokens,
+        Temperature: finalParams.Temperature,
+        TopP:        finalParams.TopP,
+        TopK:        finalParams.TopK,
+        Tools:       finalParams.Tools,
+        ToolChoice:  finalParams.ToolChoice,
+    }
+
+    response, err := c.sendRequest(ctx, reqBody)
+    if err != nil {
+        return nil, err
+    }
+
+    if len(response.Content) > 0 {
+        c.addMessageToConversation(RoleAssistant, response.Content)
+        c.trimConversationHistory()
+    }
+
+    return response, nil
+}
+
+// ChatMe handles basic chat interactions without tools
+func (c *AnthropicClient) ChatMe(ctx context.Context, message string, params *MessageParams) (*AnthropicResponse, error) {
+    finalParams := c.defaultParams
+    if params != nil {
+        if params.Model != "" {
+            finalParams.Model = params.Model
+        }
+        if params.MaxTokens != 0 {
+            finalParams.MaxTokens = params.MaxTokens
+        }
+        if params.Temperature != 0 {
+            finalParams.Temperature = params.Temperature
+        }
+        if params.TopP != 0 {
+            finalParams.TopP = params.TopP
+        }
+        if params.TopK != 0 {
+            finalParams.TopK = params.TopK
+        }
+    }
+
+    content := []MessageContent{{
+        Type: ContentTypeText,
+        Text: message,
+    }}
+
+    c.addMessageToConversation(RoleUser, content)
+    c.trimConversationHistory()
+
+    reqBody := Request{
+        Model:       finalParams.Model,
+        System:      c.systemPrompt,
+        Messages:    c.conversation,
+        MaxTokens:   finalParams.MaxTokens,
+        Temperature: finalParams.Temperature,
+        TopP:        finalParams.TopP,
+        TopK:        finalParams.TopK,
+    }
+
+    response, err := c.sendRequest(ctx, reqBody)
+    if err != nil {
+        return nil, err
+    }
+
+    if len(response.Content) > 0 {
+        c.addMessageToConversation(RoleAssistant, response.Content)
+        c.trimConversationHistory()
+    }
+
+    return response, nil
+}
+
+// sendRequest handles the HTTP communication with the Anthropic API
 func (c *AnthropicClient) sendRequest(ctx context.Context, reqBody Request) (*AnthropicResponse, error) {
     logMessage("Preparing API request")
     logJSON("Request payload", reqBody)
@@ -117,7 +246,6 @@ func (c *AnthropicClient) sendRequest(ctx context.Context, reqBody Request) (*An
         return nil, fmt.Errorf("error creating request: %w", err)
     }
 
-    // Set required headers for Anthropic API
     req.Header.Set("Content-Type", "application/json")
     req.Header.Set("anthropic-version", "2023-06-01")
     req.Header.Set("x-api-key", c.apiKey)
@@ -136,7 +264,6 @@ func (c *AnthropicClient) sendRequest(ctx context.Context, reqBody Request) (*An
         return nil, fmt.Errorf("error reading response: %w", err)
     }
 
-    // Handle non-200 responses with proper error parsing
     if resp.StatusCode != http.StatusOK {
         logMessage("Received error response (status %d)", resp.StatusCode)
         var errorResp struct {
@@ -163,56 +290,7 @@ func (c *AnthropicClient) sendRequest(ctx context.Context, reqBody Request) (*An
     return &anthropicResp, nil
 }
 
-// ChatMe handles a single message interaction while maintaining conversation history.
-// It manages the conversation state and handles logging of the entire interaction.
-func (c *AnthropicClient) ChatMe(ctx context.Context, message string, params *MessageParams) (*AnthropicResponse, error) {
-    logMessage("Starting chat interaction with message: %s", message)
-    
-    content := []MessageContent{{
-        Type: ContentTypeText,
-        Text: message,
-    }}
-
-    // Add user message to conversation history
-    c.addMessageToConversation(RoleUser, content)
-    logMessage("Added user message to conversation")
-    logJSON("Current conversation state", c.conversation)
-    
-    c.trimConversationHistory()
-
-    // Prepare request with complete message history
-    reqBody := Request{
-        Model:       params.Model,
-        System:      "You are a helpful AI assistant.",
-        Messages:    c.conversation,
-        MaxTokens:   params.MaxTokens,
-        Temperature: params.Temperature,
-        TopP:        params.TopP,
-        TopK:        params.TopK,
-        Tools:       params.Tools,
-        ToolChoice:  params.ToolChoice,
-    }
-
-    // Send request and handle any errors
-    response, err := c.sendRequest(ctx, reqBody)
-    if err != nil {
-        logMessage("Chat request failed: %v", err)
-        return nil, err
-    }
-
-    // Process and store assistant's response
-    if len(response.Content) > 0 {
-        logMessage("Adding assistant response to conversation")
-        c.addMessageToConversation(RoleAssistant, response.Content)
-        c.trimConversationHistory()
-        logJSON("Updated conversation state", c.conversation)
-    }
-
-    return response, nil
-}
-
-// Conversation management methods with logging
-
+// Conversation management methods
 func (c *AnthropicClient) addMessageToConversation(role string, content []MessageContent) {
     logMessage("Adding message to conversation (role: %s)", role)
     c.conversation = append(c.conversation, Message{
@@ -226,4 +304,69 @@ func (c *AnthropicClient) trimConversationHistory() {
         logMessage("Trimming conversation to max length: %d", c.maxConvLength)
         c.conversation = c.conversation[len(c.conversation)-c.maxConvLength:]
     }
+}
+
+// Client options
+func WithMaxConversationLength(length int) ClientOption {
+    return func(c *AnthropicClient) {
+        if length > 0 {
+            c.maxConvLength = length
+        }
+    }
+}
+
+func WithDefaultParams(params MessageParams) ClientOption {
+    return func(c *AnthropicClient) {
+        c.defaultParams = params
+    }
+}
+
+func WithHTTPClient(client *http.Client) ClientOption {
+    return func(c *AnthropicClient) {
+        if client != nil {
+            c.httpClient = client
+        }
+    }
+}
+
+// Parameter validation
+func validateToolParams(params *MessageParams) error {
+    if params == nil {
+        return fmt.Errorf("message parameters cannot be nil")
+    }
+    if params.Tools == nil {
+        return fmt.Errorf("tools cannot be nil")
+    }
+    if params.ToolChoice == nil {
+        return fmt.Errorf("tool choice cannot be nil")
+    }
+    return nil
+}
+
+// Logging helpers
+func logMessage(format string, args ...interface{}) {
+    if logging.IsLoggingEnabled() {
+        msg := fmt.Sprintf(format, args...)
+        logging.WriteLogs(fmt.Sprintf("[Anthropic] %s", msg))
+    }
+}
+
+func logJSON(prefix string, data interface{}) {
+    if logging.IsLoggingEnabled() {
+        jsonBytes, err := json.MarshalIndent(data, "", "  ")
+        if err != nil {
+            logMessage("%s: failed to marshal JSON: %v", prefix, err)
+            return
+        }
+        logging.WriteLogs(fmt.Sprintf("[Anthropic] %s: %s", prefix, string(jsonBytes)))
+    }
+}
+
+// Package-level logging control
+func EnableDebug() error {
+    return logging.EnableLogging()
+}
+
+func DisableDebug() {
+    logging.DisableLogging()
 }
