@@ -161,7 +161,7 @@ func HandleDeepSearch(ctx context.Context, args json.RawMessage) (string, error)
         return "", err
     }
     
-    results, err := tavilysearch.DeepSearch(params.Query)
+    results, err := gotavilysearch.DeepSearch(params.Query)
     if err != nil {
         return "", err
     }
