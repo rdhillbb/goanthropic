@@ -7,17 +7,13 @@ import (
     "fmt"
     "io/ioutil"
     "net/http"
-    "github.com/rdhillbb/goanthropic/tools"
+    "github.com/rdhillbb/goanthropic/types"
     "github.com/rdhillbb/logging"
 )
 
-const defaultAPIEndpoint = "https://api.anthropic.com/v1/messages"
-
-// Message types and roles
 const (
-    ContentTypeText = "text"
-    RoleUser       = "user"
-    RoleAssistant  = "assistant"
+    defaultAPIEndpoint = "https://api.anthropic.com/v1/messages"
+    defaultModel      = "claude-3-5-sonnet-20241022"
 )
 
 type ClientOption func(*AnthropicClient)
@@ -25,69 +21,12 @@ type ClientOption func(*AnthropicClient)
 // AnthropicClient handles all communication with the Anthropic API
 type AnthropicClient struct {
     apiKey          string
-    defaultParams   MessageParams
+    defaultParams   types.MessageParams
     httpClient      *http.Client
-    conversation    []Message
+    conversation    []types.Message
     maxConvLength   int
     systemPrompt    string
 }
-
-// MessageParams defines the parameters for an API request
-type MessageParams struct {
-    Model       string       `json:"model,omitempty"`
-    MaxTokens   int          `json:"max_tokens,omitempty"`
-    Temperature float64      `json:"temperature,omitempty"`
-    TopP        float64      `json:"top_p,omitempty"`
-    TopK        int          `json:"top_k,omitempty"`
-    Tools       []tools.Tool `json:"tools,omitempty"`
-    ToolChoice  *ToolChoice  `json:"tool_choice,omitempty"`
-}
-
-// Message represents a conversation message
-type Message struct {
-    Role    string           `json:"role"`
-    Content []MessageContent `json:"content"`
-}
-
-// MessageContent represents the content of a message
-type MessageContent struct {
-    Type string `json:"type"`
-    Text string `json:"text"`
-}
-
-// Request represents the API request structure
-type Request struct {
-    Model       string           `json:"model"`
-    System      string           `json:"system,omitempty"`
-    Messages    []Message        `json:"messages"`
-    MaxTokens   int             `json:"max_tokens,omitempty"`
-    Temperature float64         `json:"temperature,omitempty"`
-    TopP        float64         `json:"top_p,omitempty"`
-    TopK        int             `json:"top_k,omitempty"`
-    Tools       []tools.Tool    `json:"tools,omitempty"`
-    ToolChoice  *ToolChoice     `json:"tool_choice,omitempty"`
-}
-
-// AnthropicResponse represents the API response structure
-type AnthropicResponse struct {
-    ID           string           `json:"id"`
-    Type         string           `json:"type"`
-    Role         string           `json:"role"`
-    Content      []MessageContent `json:"content"`
-    Model        string           `json:"model"`
-    StopReason   string           `json:"stop_reason"`
-    StopSequence string           `json:"stop_sequence"`
-}
-
-// ToolChoice represents the tool choice configuration
-type ToolChoice struct {
-    Type string `json:"type"`
-}
-
-const (
-    ToolChoiceAuto = "auto"
-    ToolChoiceNone = "none"
-)
 
 // NewClient creates a new AnthropicClient
 func NewClient(apiKey string, opts ...ClientOption) *AnthropicClient {
@@ -111,7 +50,7 @@ func NewClient(apiKey string, opts ...ClientOption) *AnthropicClient {
 }
 
 // ChatWithTools handles chat interactions with tool support
-func (c *AnthropicClient) ChatWithTools(ctx context.Context, message string, params *MessageParams, handlers []tools.ToolHandler) (*AnthropicResponse, error) {
+func (c *AnthropicClient) ChatWithTools(ctx context.Context, message string, params *types.MessageParams, handlers []types.ToolHandler) (*types.AnthropicResponse, error) {
     // Use default params if none provided
     finalParams := c.defaultParams
     if params != nil {
@@ -144,15 +83,15 @@ func (c *AnthropicClient) ChatWithTools(ctx context.Context, message string, par
         return nil, fmt.Errorf("invalid parameters: %w", err)
     }
 
-    content := []MessageContent{{
-        Type: ContentTypeText,
+    content := []types.MessageContent{{
+        Type: types.ContentTypeText,
         Text: message,
     }}
 
-    c.addMessageToConversation(RoleUser, content)
+    c.addMessageToConversation(types.RoleUser, content)
     c.trimConversationHistory()
 
-    reqBody := Request{
+    reqBody := types.Request{
         Model:       finalParams.Model,
         System:      c.systemPrompt,
         Messages:    c.conversation,
@@ -170,7 +109,7 @@ func (c *AnthropicClient) ChatWithTools(ctx context.Context, message string, par
     }
 
     if len(response.Content) > 0 {
-        c.addMessageToConversation(RoleAssistant, response.Content)
+        c.addMessageToConversation(types.RoleAssistant, response.Content)
         c.trimConversationHistory()
     }
 
@@ -178,7 +117,7 @@ func (c *AnthropicClient) ChatWithTools(ctx context.Context, message string, par
 }
 
 // ChatMe handles basic chat interactions without tools
-func (c *AnthropicClient) ChatMe(ctx context.Context, message string, params *MessageParams) (*AnthropicResponse, error) {
+func (c *AnthropicClient) ChatMe(ctx context.Context, message string, params *types.MessageParams) (*types.AnthropicResponse, error) {
     finalParams := c.defaultParams
     if params != nil {
         if params.Model != "" {
@@ -198,15 +137,15 @@ func (c *AnthropicClient) ChatMe(ctx context.Context, message string, params *Me
         }
     }
 
-    content := []MessageContent{{
-        Type: ContentTypeText,
+    content := []types.MessageContent{{
+        Type: types.ContentTypeText,
         Text: message,
     }}
 
-    c.addMessageToConversation(RoleUser, content)
+    c.addMessageToConversation(types.RoleUser, content)
     c.trimConversationHistory()
 
-    reqBody := Request{
+    reqBody := types.Request{
         Model:       finalParams.Model,
         System:      c.systemPrompt,
         Messages:    c.conversation,
@@ -222,7 +161,7 @@ func (c *AnthropicClient) ChatMe(ctx context.Context, message string, params *Me
     }
 
     if len(response.Content) > 0 {
-        c.addMessageToConversation(RoleAssistant, response.Content)
+        c.addMessageToConversation(types.RoleAssistant, response.Content)
         c.trimConversationHistory()
     }
 
@@ -230,7 +169,7 @@ func (c *AnthropicClient) ChatMe(ctx context.Context, message string, params *Me
 }
 
 // sendRequest handles the HTTP communication with the Anthropic API
-func (c *AnthropicClient) sendRequest(ctx context.Context, reqBody Request) (*AnthropicResponse, error) {
+func (c *AnthropicClient) sendRequest(ctx context.Context, reqBody types.Request) (*types.AnthropicResponse, error) {
     logMessage("Preparing API request")
     logJSON("Request payload", reqBody)
 
@@ -280,7 +219,7 @@ func (c *AnthropicClient) sendRequest(ctx context.Context, reqBody Request) (*An
         return nil, fmt.Errorf("API error: %s - %s", errorResp.Error.Type, errorResp.Error.Message)
     }
 
-    var anthropicResp AnthropicResponse
+    var anthropicResp types.AnthropicResponse
     if err := json.Unmarshal(body, &anthropicResp); err != nil {
         logMessage("Error parsing response JSON: %v", err)
         return nil, fmt.Errorf("error parsing response: %w", err)
@@ -291,9 +230,9 @@ func (c *AnthropicClient) sendRequest(ctx context.Context, reqBody Request) (*An
 }
 
 // Conversation management methods
-func (c *AnthropicClient) addMessageToConversation(role string, content []MessageContent) {
+func (c *AnthropicClient) addMessageToConversation(role string, content []types.MessageContent) {
     logMessage("Adding message to conversation (role: %s)", role)
-    c.conversation = append(c.conversation, Message{
+    c.conversation = append(c.conversation, types.Message{
         Role:    role,
         Content: content,
     })
@@ -315,7 +254,7 @@ func WithMaxConversationLength(length int) ClientOption {
     }
 }
 
-func WithDefaultParams(params MessageParams) ClientOption {
+func WithDefaultParams(params types.MessageParams) ClientOption {
     return func(c *AnthropicClient) {
         c.defaultParams = params
     }
@@ -330,7 +269,7 @@ func WithHTTPClient(client *http.Client) ClientOption {
 }
 
 // Parameter validation
-func validateToolParams(params *MessageParams) error {
+func validateToolParams(params *types.MessageParams) error {
     if params == nil {
         return fmt.Errorf("message parameters cannot be nil")
     }
@@ -363,6 +302,7 @@ func logJSON(prefix string, data interface{}) {
 }
 
 // Package-level logging control
+/*
 func EnableDebug() error {
     return logging.EnableLogging()
 }
@@ -370,3 +310,4 @@ func EnableDebug() error {
 func DisableDebug() {
     logging.DisableLogging()
 }
+*/
