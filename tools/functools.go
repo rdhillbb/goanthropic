@@ -161,6 +161,7 @@ func HandleDeepSearch(ctx context.Context, args json.RawMessage) (string, error)
         return "", err
     }
     
+    //Deep Search
     results, err := gotavilysearch.DeepSearch(params.Query)
     if err != nil {
         return "", err
