@@ -10,14 +10,17 @@ import (
     "strings"
     "github.com/joho/godotenv"
     
-    "goanthropic"
-    "goanthropic/tools"
+    "github.com/rdhillbb/goanthropic"
+    "github.com/rdhillbb/goanthropic/types"
 )
 
 const defaultModel = "claude-3-5-sonnet-20241022"
 
 func main() {
     // Load environment variables from .env file
+    if _, err := os.Stat(".env"); err != nil {
+        log.Fatal("Error: .env file not found")
+    }
     if err := godotenv.Load(); err != nil {
         log.Fatal("Error loading .env file")
     }
@@ -38,22 +41,22 @@ func main() {
     }
 
     client := goanthropic.NewClient(apiKey, 
-        goanthropic.WithDefaultParams(anthropic.MessageParams{
+        goanthropic.WithDefaultParams(types.MessageParams{
             Model:      defaultModel,
-            MaxTokens:  10000,
-            Tools:      tools.GetDefaultTools(),
-            ToolChoice: &goanthropic.ToolChoice{Type: anthropic.ToolChoiceAuto},
+            MaxTokens:  7900,
+            Tools:      GetDefaultTools(),
+            ToolChoice: &types.ToolChoice{Type: types.ToolChoiceAuto},
         }),
         goanthropic.WithMaxConversationLength(1000),
     )
 
-    handlers := tools.GetDefaultHandlers()
+    handlers := GetDefaultHandlers()
     scanner := bufio.NewScanner(os.Stdin)
     ctx := context.Background()
 
     fmt.Println("Chat initialized with tools. Type 'exit' to quit.")
     fmt.Println("Available tools:")
-    for _, tool := range tools.GetDefaultTools() {
+    for _, tool := range GetDefaultTools() {
         fmt.Printf("- %s: %s\n", tool.Name, tool.Description)
     }
     fmt.Println("\nEnter your message:")
@@ -76,12 +79,7 @@ func main() {
         response, err := client.ChatWithTools(
             ctx,
             input,
-            &goanthropic.MessageParams{
-                Model:      defaultModel,
-                MaxTokens:  10000,
-                Tools:      tools.GetDefaultTools(),
-                ToolChoice: &goanthropic.ToolChoice{Type: goanthropic.ToolChoiceAuto},
-            },
+            nil,
             handlers,
         )
 
@@ -92,7 +90,7 @@ func main() {
 
         fmt.Println("\nAssistant:")
         for _, content := range response.Content {
-            if content.Type == goanthropic.ContentTypeText {
+            if content.Type == types.ContentTypeText {
                 fmt.Println(content.Text)
             }
         }
