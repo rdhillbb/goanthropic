@@ -44,6 +44,33 @@ type MessageContent struct {
     IsError    bool            `json:"is_error,omitempty"`     
 }
 
+// Tool represents an available function that can be called
+type Tool struct {
+    Type     string   `json:"type"`
+    Function Function `json:"function"`
+}
+
+// Function represents the details of a callable function
+type Function struct {
+    Name        string      `json:"name"`
+    Description string      `json:"description"`
+    Parameters  Parameters  `json:"parameters"`
+}
+
+// Parameters defines the input parameters for a function
+type Parameters struct {
+    Type       string              `json:"type"`
+    Properties map[string]Property `json:"properties"`
+    Required   []string           `json:"required"`
+}
+
+// Property defines a single parameter's properties
+type Property struct {
+    Type        string   `json:"type"`
+    Description string   `json:"description"`
+    Enum        []string `json:"enum,omitempty"`
+}
+
 // ToolUse represents a tool call from the assistant
 type ToolUse struct {
     ID    string          `json:"id"`
@@ -75,25 +102,6 @@ type Request struct {
     System      string      `json:"system,omitempty"`
     Tools       []Tool      `json:"tools,omitempty"`
     ToolChoice  *ToolChoice `json:"tool_choice,omitempty"`
-}
-
-// Tool-related types
-type Tool struct {
-    Name         string      `json:"name"`
-    Description  string      `json:"description"`
-    InputSchema  InputSchema `json:"input_schema"`
-}
-
-type InputSchema struct {
-    Type       string              `json:"type"`
-    Properties map[string]Property `json:"properties"`
-    Required   []string           `json:"required"`
-}
-
-type Property struct {
-    Type        string   `json:"type"`
-    Description string   `json:"description"`
-    Enum        []string `json:"enum,omitempty"`
 }
 
 type ToolChoice struct {
